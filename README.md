@@ -1,5 +1,7 @@
 # node-pg-migrate #894: migrations that already ran are run again
 
+[![Reproduce #894](https://github.com/brenoepics/node-pg-migrate-issue-894-poc/actions/workflows/reproduce.yml/badge.svg)](https://github.com/brenoepics/node-pg-migrate-issue-894-poc/actions/workflows/reproduce.yml)
+
 A small, self-contained reproduction of
 [salsita/node-pg-migrate#894](https://github.com/salsita/node-pg-migrate/issues/894),
 _"Migration fails but query runs in pgadmin"_, on **node-pg-migrate 9.0.0**, the latest
@@ -35,6 +37,22 @@ you are done:
 ```bash
 docker compose down -v
 ```
+
+## See it break in CI
+
+Every push runs the reproduction on GitHub's runners, so you can watch it fail without
+installing anything: [latest run](https://github.com/brenoepics/node-pg-migrate-issue-894-poc/actions/workflows/reproduce.yml).
+
+- **Bug** jobs: node-pg-migrate 9.0.0 (latest release) and 10.0.0-alpha.2 (next major), each
+  on PostgreSQL 14 and 18. They are **red on purpose**. Step 2 checks the one thing that must
+  hold, that a migration already recorded in `app.pgmigrations` is not run again, and fails
+  because node-pg-migrate runs it again. The error annotation names the migration and the
+  `relation "users" does not exist` error, and the job summary shows the output and both
+  migrations tables.
+- **Workaround** job: green. With `--schema app`, only the new migration runs.
+
+The check is [`ci/expect-no-replay.sh`](ci/expect-no-replay.sh). It also works locally once the
+database is up: `ci/expect-no-replay.sh up`.
 
 ## What you will see
 
@@ -191,4 +209,6 @@ Tell node-pg-migrate where the history lives:
 | `migrations/1654693101518_add-contract-id.js`    | The "old" migration from the issue                                    |
 | `migrations/1654693101519_order-online-column.js` | The new migration from the issue, unchanged                          |
 | `reproduce.sh`                           | Runs steps 1 to 5 above                                               |
-| `docker-compose.yml`                     | Postgres 18 on port `54894`                                           |
+| `docker-compose.yml`                     | Postgres 18 on port `54894` (`POSTGRES_VERSION` picks another)        |
+| `.github/workflows/reproduce.yml`        | The CI above                                                          |
+| `ci/expect-no-replay.sh`                 | Fails if node-pg-migrate runs a migration `app.pgmigrations` already records |

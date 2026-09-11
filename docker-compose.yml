@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    # POSTGRES_VERSION picks another major version; CI uses it for its matrix.
+    image: postgres:${POSTGRES_VERSION:-18}-alpine
     environment:
       POSTGRES_USER: app_user
       POSTGRES_PASSWORD: app_password

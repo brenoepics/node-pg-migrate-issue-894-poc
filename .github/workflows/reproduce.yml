@@ -1,0 +1,117 @@
+# Reproduces salsita/node-pg-migrate#894 on GitHub's runners.
+#
+# The "Bug" jobs are red on purpose: step 2 checks that a migration already
+# recorded in app.pgmigrations is not run again, and node-pg-migrate runs it
+# again. The "Workaround" job is green: with --schema app, only the new
+# migration runs.
+
+name: Reproduce #894
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: postgres://app_user:app_password@localhost:54894/app
+
+jobs:
+  bug:
+    name: 'Bug: node-pg-migrate ${{ matrix.node-pg-migrate }}, PostgreSQL ${{ matrix.postgres }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The latest release, and the next major.
+        node-pg-migrate: ['9.0.0', '10.0.0-alpha.2']
+        postgres: ['14', '18']
+    env:
+      POSTGRES_VERSION: ${{ matrix.postgres }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install node-pg-migrate ${{ matrix.node-pg-migrate }}
+        run: |
+          npm ci
+          npm install --no-save "node-pg-migrate@${{ matrix.node-pg-migrate }}"
+          node -p "'Installed node-pg-migrate ' + require('node-pg-migrate/package.json').version"
+
+      - name: 'Start PostgreSQL ${{ matrix.postgres }}: tables in schema "app", role search_path is "app, public"'
+        run: docker compose up -d --wait
+
+      - name: '1. Some time ago: the first migration is applied with --schema app'
+        run: npx node-pg-migrate up 1 --schema app
+
+      - name: '1. psql finds the recorded migration without "app."'
+        run: docker compose exec -T postgres psql -U app_user -d app -c 'SELECT name, run_on FROM pgmigrations'
+
+      - name: '2. Today: node-pg-migrate up with no --schema must not run it again'
+        run: ci/expect-no-replay.sh up
+
+      - name: '3. Where the history is, and where the run looked for it'
+        if: ${{ !cancelled() }}
+        run: |
+          query="SELECT 'app.pgmigrations' AS table_name, count(*) AS recorded FROM app.pgmigrations
+                 UNION ALL
+                 SELECT 'public.pgmigrations', count(*) FROM public.pgmigrations"
+          docker compose exec -T postgres psql -U app_user -d app -c "$query"
+          counts=$(docker compose exec -T postgres psql -U app_user -d app -tA -F ' | ' -c "$query")
+
+          {
+            echo '## node-pg-migrate ${{ matrix.node-pg-migrate }} on PostgreSQL ${{ matrix.postgres }}'
+            echo
+            echo 'The database already records `1654693101518_add-contract-id` in `app.pgmigrations`. `node-pg-migrate up`, run without `--schema`, printed:'
+            echo
+            echo '```'
+            sed -n '/^> Migrating files:/,/does not exist/p' node-pg-migrate.log
+            echo '```'
+            echo
+            echo 'The history is untouched in `app`. The run looked for it in `public`, found nothing, and ran everything again:'
+            echo
+            echo '| Migrations table | Recorded migrations |'
+            echo '| --- | --- |'
+            echo "$counts" | sed 's/^/| /; s/$/ |/'
+            echo
+            echo 'See the [README](${{ github.server_url }}/${{ github.repository }}#readme) for the whole story.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  workaround:
+    name: 'Workaround: --schema app (node-pg-migrate 9.0.0, PostgreSQL 18)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: 'Start PostgreSQL 18: tables in schema "app", role search_path is "app, public"'
+        run: docker compose up -d --wait
+
+      - name: '1. The first migration is applied with --schema app'
+        run: npx node-pg-migrate up 1 --schema app
+
+      - name: '2. node-pg-migrate up --schema app runs only the new migration'
+        run: ci/expect-no-replay.sh up --schema app
+
+      - name: '3. Each migration is recorded once, in app.pgmigrations'
+        run: |
+          psql() { docker compose exec -T postgres psql -U app_user -d app "$@"; }
+          psql -c 'SELECT name, run_on FROM app.pgmigrations ORDER BY id'
+          test "$(psql -tAc 'SELECT count(*) FROM app.pgmigrations')" = 2
+          test "$(psql -tAc "SELECT to_regclass('public.pgmigrations') IS NULL")" = t
