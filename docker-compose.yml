@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
+      POSTGRES_DB: app
+    ports:
+      # An unusual port, so it does not clash with a Postgres you already run.
+      - '54894:5432'
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U app_user -d app']
+      interval: 1s
+      timeout: 3s
+      retries: 30
